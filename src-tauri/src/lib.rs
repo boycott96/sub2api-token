@@ -1191,11 +1191,18 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ApiState { client })
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent)
-                .build(),
-        )
+        .plugin({
+            #[cfg(target_os = "macos")]
+            {
+                tauri_plugin_autostart::Builder::new()
+                    .macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent)
+                    .build()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                tauri_plugin_autostart::Builder::new().build()
+            }
+        })
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(target_os = "macos")]
