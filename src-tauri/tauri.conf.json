@@ -5,7 +5,7 @@
   "identifier": "com.sub2api.pet",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:1421",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -15,10 +15,10 @@
       {
         "label": "main",
         "title": "Sub2API Pet",
-        "width": 340,
-        "height": 430,
-        "minWidth": 320,
-        "minHeight": 390,
+        "width": 200,
+        "height": 210,
+        "minWidth": 150,
+        "minHeight": 180,
         "resizable": false,
         "decorations": false,
         "transparent": true,
