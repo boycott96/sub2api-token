@@ -38,6 +38,7 @@ interface PetSettings {
   cardOpacity: number
   windowX?: number
   windowY?: number
+  windowMonitor?: { x: number; y: number }
 }
 
 interface LoginResult {

@@ -25,6 +25,8 @@
     "core:window:allow-set-resizable",
     "core:window:allow-outer-position",
     "core:window:allow-cursor-position",
+    "core:window:allow-available-monitors",
+    "core:window:allow-monitor-from-point",
     "core:webview:allow-create-webview-window",
     "core:event:allow-emit",
     "core:event:allow-emit-to",

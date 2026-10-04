@@ -150,14 +150,14 @@ html.is-windows .pet-shell {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  cursor: ns-resize;
+  cursor: move;
   outline: none;
   box-sizing: border-box;
 }
 
-html.is-dragging-vertical,
-html.is-dragging-vertical * {
-  cursor: ns-resize !important;
+html.is-dragging,
+html.is-dragging * {
+  cursor: move !important;
   user-select: none !important;
 }
 

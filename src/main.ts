@@ -1,9 +1,9 @@
 import './style.css'
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
-import { LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize } from '@tauri-apps/api/dpi'
+import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi'
 import { listen } from '@tauri-apps/api/event'
-import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window'
+import { availableMonitors, currentMonitor, cursorPosition, getCurrentWindow, monitorFromPoint } from '@tauri-apps/api/window'
 import { disable, enable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { load, type Store } from '@tauri-apps/plugin-store'
@@ -44,6 +44,7 @@ interface PetSettings {
   cardOpacity: number
   windowX?: number
   windowY?: number
+  windowMonitor?: { x: number; y: number }
 }
 
 interface LoginResult {
@@ -151,8 +152,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           id="meter-card"
           role="button"
           tabindex="0"
-          aria-label="${isWindows ? '单击刷新 · 上下拖动调整位置' : '单击刷新 · 上下拖动调整位置 · 右键打开菜单'}"
-          title="${isWindows ? '单击刷新 · 上下拖动调整位置' : '单击刷新 · 上下拖动调整位置 · 右键菜单'}"
+          aria-label="${isWindows ? '单击刷新 · 拖动调整屏幕和位置' : '单击刷新 · 拖动调整屏幕和位置 · 右键打开菜单'}"
+          title="${isWindows ? '单击刷新 · 拖动调整屏幕和位置' : '单击刷新 · 拖动调整屏幕和位置 · 右键菜单'}"
         >
           <svg class="dock-backdrop-svg" id="dock-backdrop-svg" aria-hidden="true" focusable="false">
             <path class="dock-backdrop-path" id="dock-backdrop-path" />
@@ -1141,9 +1142,11 @@ function startAutoRefresh(): void {
 function generateDockPath(w: number, h: number): string {
   // Let each shoulder taper smoothly into the screen edge. The vertical
   // tangent at either end avoids a hard corner; the lower half mirrors it.
+  // The screen-side edge runs straight just past the window so the fill covers
+  // the last pixel column and its stroke is clipped off-screen.
   const x = (value: number) => Number(((value / 52) * w).toFixed(2))
+  const outside = w + 2
   const bottom = (value: number) => h - value
-  const middle = h / 2
 
   return [
     `M ${w} 0`,
@@ -1154,8 +1157,8 @@ function generateDockPath(w: number, h: number): string {
     `C 0 ${bottom(48)}, 0 ${bottom(43)}, ${x(1)} ${bottom(38)}`,
     `C ${x(3)} ${bottom(28)}, ${x(13)} ${bottom(22)}, ${x(25)} ${bottom(22)}`,
     `C ${x(39)} ${bottom(22)}, ${w} ${bottom(12)}, ${w} ${h}`,
-    `C ${w} ${bottom(40)}, ${x(51)} ${middle + 22}, ${x(51)} ${middle}`,
-    `C ${x(51)} ${middle - 22}, ${w} 40, ${w} 0`,
+    `L ${outside} ${h}`,
+    `L ${outside} 0`,
     `Z`,
   ].join(' ')
 }
@@ -1192,42 +1195,48 @@ async function anchorWindowToRight(width?: number, height?: number): Promise<voi
   try {
     const win = getCurrentWindow()
     await win.setShadow(false).catch(() => {})
-    const monitor = await currentMonitor()
+    const monitors = await availableMonitors()
+    const monitor = monitors.find((item) =>
+      item.position.x === settings.windowMonitor?.x && item.position.y === settings.windowMonitor?.y,
+    ) ?? await currentMonitor()
     if (!monitor) {
       await invoke('anchor_main_window_right', { y: settings.windowY ?? null })
       return
     }
-    const scale = monitor.scaleFactor || 1
     const workArea = monitor.workArea || {
       position: monitor.position,
       size: monitor.size,
     }
-    const workX = workArea.position.x / scale
-    const workY = workArea.position.y / scale
-    const workW = workArea.size.width / scale
-    const workH = workArea.size.height / scale
-
     const size = widgetWindowSize()
-    const winW = width ?? size.width
-    const winH = height ?? size.height
-
-    const marginX = 0
-    const targetX = Math.round(workX + workW - winW - marginX)
+    const scale = monitor.scaleFactor || 1
+    const winW = Math.round((width ?? size.width) * scale)
+    const winH = Math.round((height ?? size.height) * scale)
+    const targetX = workArea.position.x + workArea.size.width - winW
+    const maxY = Math.max(workArea.position.y, workArea.position.y + workArea.size.height - winH)
     let targetY: number
     if (typeof settings.windowY === 'number' && Number.isFinite(settings.windowY)) {
-      targetY = Math.round(Math.max(workY, Math.min(workY + workH - winH, settings.windowY)))
+      // Older settings stored logical Y. New positions use physical pixels.
+      const savedY = settings.windowMonitor ? settings.windowY : settings.windowY * scale
+      targetY = Math.round(Math.max(workArea.position.y, Math.min(maxY, savedY)))
     } else {
-      targetY = Math.round(workY + (workH - winH) / 2)
+      targetY = Math.round(workArea.position.y + (maxY - workArea.position.y) / 2)
     }
-
-    await win.setPosition(new LogicalPosition(targetX, targetY))
+    await win.setPosition(new PhysicalPosition(targetX, targetY))
+    const actualSize = await win.outerSize()
+    if (actualSize.width !== winW || actualSize.height !== winH) {
+      const actualMaxY = Math.max(workArea.position.y, workArea.position.y + workArea.size.height - actualSize.height)
+      await win.setPosition(new PhysicalPosition(
+        workArea.position.x + workArea.size.width - actualSize.width,
+        Math.max(workArea.position.y, Math.min(actualMaxY, targetY)),
+      ))
+    }
   } catch (err) {
     console.error('Failed to anchor window to right:', err)
   }
 }
 
 async function applyWindowSize(): Promise<void> {
-  if (!isDesktop) return
+  if (!isDesktop || dragActive) return
   const win = getCurrentWindow()
   const size = widgetWindowSize()
   updateDockBackdrop(size.width, size.height)
@@ -1487,90 +1496,92 @@ async function handleMenuAction(action: string): Promise<void> {
   }
 }
 
-// Vertical drag state: allows user to slide the edge-dock widget up and down along the screen's right bezel.
+// Keep drag coordinates in physical pixels across monitors with different scale factors.
 let dragActive = false
+let dragReady = false
 let dragStarted = false
 let wasDragging = false
-let dragStartCursorY = 0
-let dragStartWindowY = 0
-let dragTargetX = 0
-let dragWorkMinY = 0
-let dragWorkMaxY = 0
+let dragPointerId: number | null = null
+let dragSequence = 0
+let dragStartScreenX = 0
+let dragStartScreenY = 0
+let dragStartCursor = new PhysicalPosition(0, 0)
+let dragStartWindow = new PhysicalPosition(0, 0)
 let dragRafId: number | null = null
-let dragPendingY: number | null = null
+let dragMovePromise: Promise<void> = Promise.resolve()
 
 meterCard.addEventListener('pointerdown', async (event) => {
-  if (event.button !== 0 || !isDesktop) return
+  if (event.button !== 0 || !isDesktop || dragActive) return
   if ((event.target as HTMLElement)?.closest('.icon-button')) return
 
   dragActive = true
+  dragPointerId = event.pointerId
+  const sequence = ++dragSequence
+  dragReady = false
   dragStarted = false
   wasDragging = false
-  dragStartCursorY = event.screenY
-
-  try {
-    const win = getCurrentWindow()
-    const currentPos = await win.outerPosition()
-    const monitor = await currentMonitor()
-    const scale = monitor?.scaleFactor || 1
-    const workArea = monitor?.workArea || {
-      position: monitor?.position || { x: 0, y: 0 },
-      size: monitor?.size || { width: 1920, height: 1080 },
-    }
-    const workX = workArea.position.x / scale
-    const workY = workArea.position.y / scale
-    const workW = workArea.size.width / scale
-    const workH = workArea.size.height / scale
-
-    const size = widgetWindowSize()
-    dragTargetX = Math.round(workX + workW - size.width)
-    dragStartWindowY = Math.round(currentPos.y / scale)
-    dragWorkMinY = Math.round(workY)
-    dragWorkMaxY = Math.round(workY + workH - size.height)
-  } catch {
-    dragStartWindowY = settings.windowY ?? 300
-    dragWorkMinY = 0
-    dragWorkMaxY = 2000
-  }
+  dragMovePromise = Promise.resolve()
+  dragStartScreenX = event.screenX
+  dragStartScreenY = event.screenY
 
   try {
     meterCard.setPointerCapture(event.pointerId)
   } catch {
     // ignore
   }
+
+  try {
+    const win = getCurrentWindow()
+    const [windowPosition, pointerPosition] = await Promise.all([win.outerPosition(), cursorPosition()])
+    if (!dragActive || sequence !== dragSequence) return
+    dragStartWindow = windowPosition
+    dragStartCursor = pointerPosition
+    dragReady = true
+  } catch {
+    dragActive = false
+  }
 })
 
 window.addEventListener('pointermove', (event) => {
-  if (!dragActive || !isDesktop) return
+  if (!dragActive || !dragReady || !isDesktop || event.pointerId !== dragPointerId) return
 
-  const deltaY = event.screenY - dragStartCursorY
-  if (!dragStarted && Math.abs(deltaY) > 3) {
+  const deltaX = event.screenX - dragStartScreenX
+  const deltaY = event.screenY - dragStartScreenY
+  if (!dragStarted && Math.hypot(deltaX, deltaY) > 3) {
     dragStarted = true
     wasDragging = true
-    document.documentElement.classList.add('is-dragging-vertical')
+    document.documentElement.classList.add('is-dragging')
   }
 
-  if (dragStarted) {
-    const rawY = dragStartWindowY + deltaY
-    const clampedY = Math.max(dragWorkMinY, Math.min(dragWorkMaxY, rawY))
-    dragPendingY = clampedY
-
-    if (!dragRafId) {
-      dragRafId = requestAnimationFrame(() => {
-        if (dragPendingY !== null) {
-          const win = getCurrentWindow()
-          void win.setPosition(new LogicalPosition(dragTargetX, dragPendingY))
-          dragPendingY = null
+  if (dragStarted && dragRafId === null) {
+    const sequence = dragSequence
+    dragRafId = requestAnimationFrame(() => {
+      void (async () => {
+        try {
+          const pointerPosition = await cursorPosition()
+          if (!dragActive || sequence !== dragSequence) return
+          const target = new PhysicalPosition(
+            dragStartWindow.x + pointerPosition.x - dragStartCursor.x,
+            dragStartWindow.y + pointerPosition.y - dragStartCursor.y,
+          )
+          dragMovePromise = getCurrentWindow().setPosition(target)
+          await dragMovePromise
+        } catch {
+          // The final drop still selects the monitor under the pointer.
+        } finally {
+          dragRafId = null
         }
-        dragRafId = null
-      })
-    }
+      })()
+    })
   }
 })
 
-window.addEventListener('pointerup', async (event) => {
-  if (!dragActive) return
+async function finishDrag(event: PointerEvent): Promise<void> {
+  if (!dragActive || event.pointerId !== dragPointerId) return
   dragActive = false
+  dragReady = false
+  dragPointerId = null
+  dragSequence++
 
   try {
     meterCard.releasePointerCapture(event.pointerId)
@@ -1584,15 +1595,28 @@ window.addEventListener('pointerup', async (event) => {
   }
 
   if (dragStarted) {
-    document.documentElement.classList.remove('is-dragging-vertical')
-    const deltaY = event.screenY - dragStartCursorY
-    const finalY = Math.max(dragWorkMinY, Math.min(dragWorkMaxY, dragStartWindowY + deltaY))
-
-    const win = getCurrentWindow()
-    await win.setPosition(new LogicalPosition(dragTargetX, finalY))
-
-    settings.windowY = finalY
-    await saveSettings()
+    document.documentElement.classList.remove('is-dragging')
+    try {
+      await dragMovePromise.catch(() => {})
+      const pointerPosition = await cursorPosition()
+      const monitor = await monitorFromPoint(pointerPosition.x, pointerPosition.y)
+        ?? await currentMonitor()
+      if (monitor) {
+        const area = monitor.workArea || { position: monitor.position, size: monitor.size }
+        const windowHeight = Math.round(widgetWindowSize().height * (monitor.scaleFactor || 1))
+        const maxY = Math.max(area.position.y, area.position.y + area.size.height - windowHeight)
+        const finalY = Math.round(Math.max(
+          area.position.y,
+          Math.min(maxY, dragStartWindow.y + pointerPosition.y - dragStartCursor.y),
+        ))
+        settings.windowMonitor = { x: monitor.position.x, y: monitor.position.y }
+        settings.windowY = finalY
+        await saveSettings()
+        await applyWindowSize()
+      }
+    } catch (error) {
+      console.error('Failed to dock window after drag:', error)
+    }
 
     window.setTimeout(() => {
       wasDragging = false
@@ -1601,24 +1625,13 @@ window.addEventListener('pointerup', async (event) => {
     wasDragging = false
   }
   dragStarted = false
-})
+}
 
-window.addEventListener('pointercancel', () => {
-  if (dragActive) {
-    dragActive = false
-    dragStarted = false
-    document.documentElement.classList.remove('is-dragging-vertical')
-    if (dragRafId) {
-      cancelAnimationFrame(dragRafId)
-      dragRafId = null
-    }
-    window.setTimeout(() => {
-      wasDragging = false
-    }, 120)
-  }
-})
+window.addEventListener('pointerup', (event) => void finishDrag(event))
+window.addEventListener('pointercancel', (event) => void finishDrag(event))
+meterCard.addEventListener('lostpointercapture', (event) => void finishDrag(event))
 
-// Click anywhere on card (outside child buttons) to refresh quota (suppressed after vertical drag).
+// Click anywhere on card (outside child buttons) to refresh quota (suppressed after drag).
 meterCard.addEventListener('click', (event) => {
   if (wasDragging) {
     event.preventDefault()
