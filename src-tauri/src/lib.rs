@@ -91,6 +91,7 @@ struct PoolAccount {
     plan: Option<String>,
     platform: String,
     account_type: String,
+    last_used_at: Option<String>,
 }
 
 /// Kept for the single-account command used by older clients.
@@ -130,6 +131,7 @@ struct AccountQuotaRow {
     plan: Option<String>,
     platform: String,
     account_type: String,
+    last_used_at: Option<String>,
     /// Primary remaining percent used for alerts (lowest remaining window).
     remaining_percent: Option<f64>,
     windows: Vec<QuotaWindow>,
@@ -361,6 +363,10 @@ fn account_from_value(value: &Value) -> Option<PoolAccount> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let last_used_at = value
+        .get("last_used_at")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let plan = value
         .pointer("/extra/plan_type")
         .or_else(|| value.pointer("/extra/subscription_tier"))
@@ -375,6 +381,7 @@ fn account_from_value(value: &Value) -> Option<PoolAccount> {
         plan,
         platform: platform.to_string(),
         account_type,
+        last_used_at,
     })
 }
 
@@ -925,6 +932,7 @@ fn row_from_windows(
         plan: account.plan.clone(),
         platform: account.platform.clone(),
         account_type: account.account_type.clone(),
+        last_used_at: account.last_used_at.clone(),
         remaining_percent,
         windows,
         updated_at,
@@ -2309,6 +2317,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn account_last_used_at_reaches_quota_row() {
+        let item = json!({
+            "id": 7,
+            "name": "Codex Main",
+            "status": "active",
+            "platform": "openai",
+            "type": "oauth",
+            "last_used_at": "2026-09-24T01:00:00Z"
+        });
+        let account = account_from_value(&item).unwrap();
+        let row = empty_row(&account);
+        assert_eq!(row.last_used_at.as_deref(), Some("2026-09-24T01:00:00Z"));
+    }
+
+    #[test]
     fn cached_quota_prefers_canonical_weekly_fields() {
         let account = json!({
             "extra": {
@@ -2490,6 +2513,7 @@ mod tests {
             plan: Some("max".into()),
             platform: "anthropic".into(),
             account_type: "oauth".into(),
+            last_used_at: None,
         };
         let row = usage_to_row(&account, &usage, "cached");
         assert_eq!(row.windows.len(), 2);

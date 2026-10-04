@@ -34,6 +34,7 @@ interface PetSettings {
   autoStart: boolean
   maxDisplayAccounts: number
   refreshIntervalSec: number
+  recentUseMinutes: number
   showModels: ModelVisibility
   cardOpacity: number
   windowX?: number
@@ -60,6 +61,7 @@ const defaultSettings: PetSettings = {
   autoStart: false,
   maxDisplayAccounts: 5,
   refreshIntervalSec: 30,
+  recentUseMinutes: 3,
   showModels: { ...defaultShowModels },
   cardOpacity: 0.92,
 }
@@ -74,6 +76,7 @@ const REFRESH_INTERVAL_OPTIONS = [
   { value: 300, label: '5 分钟' },
   { value: 600, label: '10 分钟' },
 ] as const
+const RECENT_USE_OPTIONS = [1, 2, 3, 5, 10, 15, 30] as const
 
 let settings = { ...defaultSettings, showModels: { ...defaultShowModels } }
 let appStore: Store | null = null
@@ -204,13 +207,18 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
               <select id="refresh-interval"></select>
               <small class="field-hint">自动同步缓存额度的时间间隔</small>
             </label>
+            <label class="field setting-select-field">
+              <span>最近使用判定</span>
+              <select id="recent-use-minutes"></select>
+              <small class="field-hint">账号在此时间内使用过时，Logo 顺时针旋转，每 6 秒一圈</small>
+            </label>
             <label class="field setting-select-field card-opacity-field">
               <span>卡片不透明度</span>
               <div class="opacity-row">
                 <input id="card-opacity" type="range" min="0" max="100" step="1" value="92" />
                 <span class="opacity-value" id="card-opacity-label">92%</span>
               </div>
-              <small class="field-hint">柱状图背景卡片：0% 全透明，100% 不透明</small>
+              <small class="field-hint">浮窗背景：0% 全透明，100% 不透明；Logo 和额度圆环保持可见</small>
             </label>
             <label class="switch-line">
               <span><strong>始终置顶</strong><small>宠物保持在其他窗口上方</small></span>
@@ -291,6 +299,7 @@ const cardOpacityInput = el<HTMLInputElement>('#card-opacity')
 const cardOpacityLabel = el<HTMLElement>('#card-opacity-label')
 const maxDisplayAccountsInput = el<HTMLSelectElement>('#max-display-accounts')
 const refreshIntervalInput = el<HTMLSelectElement>('#refresh-interval')
+const recentUseInput = el<HTMLSelectElement>('#recent-use-minutes')
 const formError = el<HTMLElement>('#form-error')
 const connectButton = el<HTMLButtonElement>('#connect-button')
 const saveButton = el<HTMLButtonElement>('#save-button')
@@ -320,6 +329,12 @@ function clampRefreshInterval(value: unknown): number {
   return Math.max(10, Math.min(3600, Math.round(n)))
 }
 
+function clampRecentUseMinutes(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return defaultSettings.recentUseMinutes
+  return Math.max(1, Math.min(30, Math.round(n)))
+}
+
 function clampCardOpacity(value: unknown): number {
   const n = Number(value)
   if (!Number.isFinite(n)) return defaultSettings.cardOpacity
@@ -342,6 +357,7 @@ function normalizeSettings(raw: Partial<PetSettings> | null | undefined): PetSet
     ...raw,
     maxDisplayAccounts: clampDisplayAccounts(raw?.maxDisplayAccounts),
     refreshIntervalSec: clampRefreshInterval(raw?.refreshIntervalSec),
+    recentUseMinutes: clampRecentUseMinutes(raw?.recentUseMinutes),
     showModels: normalizeShowModels(raw?.showModels),
     cardOpacity: clampCardOpacity(raw?.cardOpacity),
   }
@@ -368,6 +384,13 @@ function populateSelects(): void {
     option.value = String(item.value)
     option.textContent = item.label
     refreshIntervalInput.append(option)
+  }
+  recentUseInput.replaceChildren()
+  for (const minutes of RECENT_USE_OPTIONS) {
+    const option = document.createElement('option')
+    option.value = String(minutes)
+    option.textContent = `${minutes} 分钟`
+    recentUseInput.append(option)
   }
 }
 
@@ -429,6 +452,7 @@ function fillForm(): void {
   cardOpacityLabel.textContent = `${percent}%`
   maxDisplayAccountsInput.value = String(clampDisplayAccounts(settings.maxDisplayAccounts))
   refreshIntervalInput.value = String(clampRefreshInterval(settings.refreshIntervalSec))
+  recentUseInput.value = String(clampRecentUseMinutes(settings.recentUseMinutes))
   if (![...refreshIntervalInput.options].some((o) => o.value === refreshIntervalInput.value)) {
     const option = document.createElement('option')
     option.value = refreshIntervalInput.value
@@ -521,6 +545,7 @@ async function saveConnectedSettings(): Promise<void> {
     settings.cardOpacity = clampCardOpacity(Number(cardOpacityInput.value) / 100)
     settings.maxDisplayAccounts = clampDisplayAccounts(maxDisplayAccountsInput.value)
     settings.refreshIntervalSec = clampRefreshInterval(refreshIntervalInput.value)
+    settings.recentUseMinutes = clampRecentUseMinutes(recentUseInput.value)
 
     if (isDesktop) {
       // Autostart can fail on some Windows setups — never block saving the rest.

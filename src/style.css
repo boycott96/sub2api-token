@@ -41,7 +41,7 @@ button {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-user-drag: none;
-  /* Solid opaque dock background (no transparency) */
+  /* Only the backdrop follows card opacity; logos and quota rings stay visible. */
   --meter-card-opacity: 1;
   --meter-card-border: 0.16;
   --meter-card-blur: 0px;
@@ -169,6 +169,8 @@ html.is-dragging-vertical * {
   pointer-events: none;
   z-index: 0;
   overflow: visible;
+  opacity: var(--meter-card-opacity, 1);
+  transition: opacity 180ms ease;
 }
 
 .dock-backdrop-path {
@@ -321,6 +323,21 @@ html.is-dragging-vertical * {
   height: 26px;
   pointer-events: none;
   transition: opacity 120ms cubic-bezier(0.2, 0, 0.2, 1), transform 120ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.ring-badge.is-recently-used:not(:hover) .ring-center-icon {
+  animation: recent-use-spin 6s linear infinite;
+}
+
+@keyframes recent-use-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-badge.is-recently-used:not(:hover) .ring-center-icon {
+    animation: none;
+  }
 }
 
 .ring-badge:hover .ring-center-icon {
