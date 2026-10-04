@@ -1563,13 +1563,21 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Menu events arrive on the main thread, where creating a WebView2 window can hang.
+fn spawn_show_account_panel<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = show_account_panel_window(&app);
+    });
+}
+
 /// Legacy label kept so any old secondary process can still be closed.
 const ACTION_MENU_LABEL: &str = "action-menu";
 
 fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         "pool" | "show" | "open-panel" => {
-            let _ = show_account_panel_window(app);
+            spawn_show_account_panel(app);
         }
         "refresh" => {
             show_main_window(app);
@@ -1586,7 +1594,7 @@ fn handle_menu_action<R: Runtime>(app: &AppHandle<R>, id: &str) {
         "quit" => app.exit(0),
         "empty" => {}
         other if other.starts_with("account-") => {
-            let _ = show_account_panel_window(app);
+            spawn_show_account_panel(app);
         }
         _ => {}
     }
@@ -1649,7 +1657,16 @@ const SETTINGS_LABEL: &str = "settings";
 const SETTINGS_WIDTH: f64 = 380.0;
 const SETTINGS_HEIGHT: f64 = 640.0;
 
+/// Serializes secondary window creation so the startup warm-up and a front-end open request
+/// cannot both build the same label (the loser leaves an orphaned, never-loading window).
+///
+/// Only take this lock off the main thread: `build()` waits on the main thread, so holding it
+/// there while another thread builds would deadlock. WebView2 also cannot create a webview
+/// from inside a synchronous command or event handler on the main thread.
+static WINDOW_CREATE_LOCK: Mutex<()> = Mutex::new(());
+
 fn ensure_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), PetError> {
+    let _guard = WINDOW_CREATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if app.get_webview_window(SETTINGS_LABEL).is_some() {
         return Ok(());
     }
@@ -1672,7 +1689,7 @@ fn ensure_settings_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), PetError
 
 /// Dedicated settings dialog so the transparent pet window stays visible and undocked.
 #[tauri::command]
-fn show_settings_window(app: AppHandle) -> Result<(), PetError> {
+async fn show_settings_window(app: AppHandle) -> Result<(), PetError> {
     ensure_settings_window(&app)?;
 
     let Some(window) = app.get_webview_window(SETTINGS_LABEL) else {
@@ -2121,6 +2138,7 @@ fn anchor_main_window_right<R: Runtime>(app: AppHandle<R>, y: Option<i32>) -> Re
 }
 
 fn ensure_account_panel_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), PetError> {
+    let _guard = WINDOW_CREATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if app.get_webview_window(ACCOUNT_PANEL_LABEL).is_some() {
         return Ok(());
     }
@@ -2175,7 +2193,7 @@ fn show_account_panel_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), PetEr
 }
 
 #[tauri::command]
-fn show_account_panel(app: AppHandle) -> Result<(), PetError> {
+async fn show_account_panel(app: AppHandle) -> Result<(), PetError> {
     show_account_panel_window(&app)
 }
 
@@ -2253,13 +2271,11 @@ pub fn run() {
             // (WebView2 on Windows is especially slow to create on demand).
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                // Small delay so the pet window paints first.
+                // Small delay so the pet window paints first. Build from this worker thread
+                // (not the main thread) so it can share WINDOW_CREATE_LOCK with commands.
                 std::thread::sleep(Duration::from_millis(400));
-                let h = handle.clone();
-                let _ = handle.run_on_main_thread(move || {
-                    let _ = ensure_settings_window(&h);
-                    let _ = ensure_account_panel_window(&h);
-                });
+                let _ = ensure_settings_window(&handle);
+                let _ = ensure_account_panel_window(&handle);
             });
 
             Ok(())
